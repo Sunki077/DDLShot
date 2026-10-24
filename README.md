@@ -7,7 +7,7 @@
 
 * **不进相册、不留截图**：截屏在进程内完成（ScreenCaptureKit），OCR 走系统 Vision，**默认不联网**
 * **默认走本地规则引擎**：不配任何 key 也能用；配了 key 才启用大模型引擎，一次抽出全部 DDL
-* **模型不挑家**：MiniMax / DeepSeek / OpenAI / 通义千问 / 智谱 / Kimi / 豆包 / 硅基流动 / Gemini / Ollama / 任意 OpenAI 兼容接口
+* **模型不挑家**： DeepSeek / MiniMax / OpenAI / 通义千问 / 智谱 / Kimi / 豆包 / 硅基流动 / Gemini / Ollama / 任意 OpenAI 兼容接口
 * **写进真正的系统提醒事项**（EventKit），不是自建待办列表
 
 ---
