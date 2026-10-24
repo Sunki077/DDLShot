@@ -34,9 +34,24 @@ public enum HotKeyLog {
 
     private static let queue = DispatchQueue(label: "ddlshot.hotkey.log")
 
+    /// 日志体积上限。诊断日志只在「带 ⌘/⌃/⌥ 的按键」或目标键时写，
+    /// 普通打字不记 —— 但重度用快捷键的人一天能写几百行，
+    /// 不加轮转的话文件会一直涨，所以超过 1MB 就滚一代（只留一代备份）。
+    private static let maxBytes = 1_048_576
+    private static var backupPath: String { path + ".1" }
+
+    private static func rotateIfNeeded() {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? Int, size > maxBytes else { return }
+        try? fm.removeItem(atPath: backupPath)
+        try? fm.moveItem(atPath: path, toPath: backupPath)
+    }
+
     public static func write(_ message: String) {
         let line = "[\(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))] \(message)\n"
         queue.sync {
+            rotateIfNeeded()
             if let data = line.data(using: .utf8) {
                 if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
                     defer { try? fh.close() }
