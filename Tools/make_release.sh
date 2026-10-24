@@ -26,6 +26,7 @@ rsync -a \
   --exclude='/dist/' \
   --exclude='.DS_Store' \
   --exclude='_CGS*' \
+  --exclude='/Resources/AppIcon.icns' \
   "$ROOT/" "$STAGE/"
 # 顺带清掉 macOS 的资源分支垃圾文件
 find "$STAGE" -name '._*' -delete 2>/dev/null || true
