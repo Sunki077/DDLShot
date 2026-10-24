@@ -669,13 +669,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = MenuBarController()
     /// 由 launchd 开机拉起时不弹面板（免得开机就抢焦点）
     private let launchedAtLogin = ProcessInfo.processInfo.environment["DDLSHOT_LAUNCHED_AT_LOGIN"] == "1"
-    /// 开机自启后的第一次激活不弹面板（否则登录完立刻弹窗）
-    private var skipFirstActivation = false
+    /// 进程启动时刻：用来区分「启动瞬间系统自动激活」与「用户后来主动点 Dock 图标」
+    private let launchDate = Date()
+    /// 启动后这段时间内的激活一律视为系统自动激活，不弹面板
+    private static let autoActivationWindow: TimeInterval = 8
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         controller.start()
         if launchedAtLogin {
-            skipFirstActivation = true
             controller.notify("DDLShot 已在后台运行", "点 Dock 图标或双击 DDLShot.app 可打开控制面板；⌃⌥D 可随时截取最前窗口")
         } else {
             controller.showPanel()
@@ -687,7 +688,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 从 Dock 点图标进来时把面板叫出来。
     /// macOS 只在「没有可见窗口」时才发 reopen 事件，所以这里补一道 activation 兜底。
     func applicationDidBecomeActive(_ notification: Notification) {
-        if skipFirstActivation { skipFirstActivation = false; return }
+        // 启动瞬间系统会自动激活一次（登录自启 / launchctl 拉起），那一次不该弹面板。
+        // 这里用「启动后 8 秒内」的时间窗来识别它 —— 早先的写法是「跳过一次激活」，
+        // 结果把用户的第一次点击也一起吞了，表现为点 Dock 一点反应都没有。
+        // 注意：真正的 Dock 点击会发 reopen 事件，那条路不受这个时间窗影响，始终弹面板。
+        if Date().timeIntervalSince(launchDate) < Self.autoActivationWindow { return }
         controller.showPanelIfNeeded()
     }
 
