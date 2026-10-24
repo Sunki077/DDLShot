@@ -145,13 +145,13 @@ echo "com.yourname.ddlshot" > ~/.config/ddlshot/bundle_id
 提醒事项权限：完全访问 ✅
 可见清单　：提醒事项、DDL
 屏幕录制权限：已授权 ✅
-大模型：已配置（MiniMax · MiniMax-M3.1-Flash @ https://api.minimax.cn/anthropic/v1）
+大模型：已配置（你的模型名称）
 ```
 
 想重新授权：
 
 ```bash
-# 方式一：系统设置里手动开（最稳）
+# 方式一：系统设置里手动开
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"
 
 # 方式二：重置记录，让系统重新弹窗（把 id 换成你自己的）
@@ -194,7 +194,7 @@ DDLShot 有两套解析引擎。默认是 `--engine auto`：**配置了大模型
 ```json
 {
   "llm": {
-    "provider": "minimax",
+    "provider": "供应商名字",
     "api_key": "把你的 API Key 填在这里",
     "model": "",
     "base_url": "",
