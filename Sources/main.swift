@@ -266,6 +266,64 @@ final class MenuBarController: NSObject {
         refreshPanelStatus()
     }
 
+    /// 面板已经开着就别再叫一次（避免 activate → becomeActive → 再 activate 的回环）
+    func showPanelIfNeeded() {
+        if let p = panel, p.isVisible { return }
+        showPanel()
+    }
+
+    /// 常规 App 的主菜单。
+    /// 有了 Dock 图标之后就是个正常 Mac App，菜单栏不能是空的：
+    /// 至少要能 ⌘Q 退出、⌘W 关窗、⌘M 最小化，以及在输入框里 ⌘C / ⌘V。
+    func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+
+        // ── 应用菜单 ──
+        let appMenu = NSMenu()
+        let appItem = NSMenuItem()
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+        let aboutItem = NSMenuItem(title: "关于 DDLShot", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        aboutItem.target = NSApp
+        appMenu.addItem(aboutItem)
+        let permItem = NSMenuItem(title: "权限自检…", action: #selector(showAbout), keyEquivalent: "")
+        permItem.target = self
+        appMenu.addItem(permItem)
+        appMenu.addItem(.separator())
+        let hideItem = NSMenuItem(title: "隐藏 DDLShot", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        hideItem.target = NSApp
+        appMenu.addItem(hideItem)
+        appMenu.addItem(.separator())
+        let quitItem = NSMenuItem(title: "退出 DDLShot", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitItem.target = NSApp
+        appMenu.addItem(quitItem)
+
+        // ── 编辑菜单 ──
+        let editMenu = NSMenu(title: "编辑")
+        let editItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        editItem.submenu = editMenu
+        main.addItem(editItem)
+        for (title, sel, key) in [("撤销", "undo:", "z"), ("重做", "redo:", "Z"),
+                                  ("剪切", "cut:", "x"), ("拷贝", "copy:", "c"),
+                                  ("粘贴", "paste:", "v"), ("全选", "selectAll:", "a")] {
+            let it = NSMenuItem(title: title, action: Selector((sel)), keyEquivalent: key)
+            it.target = NSApp
+            editMenu.addItem(it)
+        }
+
+        // ── 窗口菜单 ──
+        let winMenu = NSMenu(title: "窗口")
+        let winItem = NSMenuItem(title: "窗口", action: nil, keyEquivalent: "")
+        winItem.submenu = winMenu
+        main.addItem(winItem)
+        let miniItem = NSMenuItem(title: "收起", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        winMenu.addItem(miniItem)
+        winMenu.addItem(.separator())
+        winMenu.addItem(withTitle: "前置全部窗口", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
+
+        return main
+    }
+
     /// 把窗口夹回屏幕可见区域，至少留一部分在屏幕里
     private func clampOnScreen(_ w: NSWindow) {
         guard let screen = w.screen ?? NSScreen.main else { return }
@@ -292,8 +350,9 @@ final class MenuBarController: NSObject {
     private func makePanel() -> NSPanel {
         let w: CGFloat = 380
         let h: CGFloat = 560
+        // .miniaturizable：标题栏上要有最小化按钮（最小化后收到 Dock 里）
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: w, height: h),
-                        styleMask: [.titled, .closable],
+                        styleMask: [.titled, .closable, .miniaturizable],
                         backing: .buffered, defer: false)
         p.title = "DDLShot"
         p.titleVisibility = .hidden
@@ -607,20 +666,30 @@ final class MenuBarController: NSObject {
 // MARK: - AppDelegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let controller = MenuBarController()
+    let controller = MenuBarController()
     /// 由 launchd 开机拉起时不弹面板（免得开机就抢焦点）
     private let launchedAtLogin = ProcessInfo.processInfo.environment["DDLSHOT_LAUNCHED_AT_LOGIN"] == "1"
+    /// 开机自启后的第一次激活不弹面板（否则登录完立刻弹窗）
+    private var skipFirstActivation = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         controller.start()
         if launchedAtLogin {
-            controller.notify("DDLShot 已在后台运行", "双击 DDLShot.app 可打开控制面板；⌃⌥D 可随时截取最前窗口")
+            skipFirstActivation = true
+            controller.notify("DDLShot 已在后台运行", "点 Dock 图标或双击 DDLShot.app 可打开控制面板；⌃⌥D 可随时截取最前窗口")
         } else {
             controller.showPanel()
             controller.notify("DDLShot 已启动", "控制面板已打开；⌃⌥D 可随时截取最前窗口")
         }
     }
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    /// 从 Dock 点图标进来时把面板叫出来。
+    /// macOS 只在「没有可见窗口」时才发 reopen 事件，所以这里补一道 activation 兜底。
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if skipFirstActivation { skipFirstActivation = false; return }
+        controller.showPanelIfNeeded()
+    }
 
     /// App 已在运行时，用户又在访达里双击它 —— macOS 不会新起进程，
     /// 而是给正在跑的实例发一个「reopen」事件。不接这个事件的话，
@@ -667,7 +736,9 @@ if rawArgs.isEmpty {
     let app = NSApplication.shared
     let delegate = AppDelegate()          // 顶层变量 → 全局强引用，避免 delegate 被释放
     app.delegate = delegate
-    app.setActivationPolicy(.accessory)
+    // 正常 App 模式：要有 Dock 图标和主菜单。
+    // 这里**不能**再 setActivationPolicy(.accessory) —— 那会把 App 从 Dock 里踢出去。
+    app.mainMenu = delegate.controller.makeMainMenu()
     app.run()
 } else {
     var cli = CLI()

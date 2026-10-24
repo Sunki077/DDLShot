@@ -23,8 +23,10 @@
 	<string>6.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
+	<!-- 正常 App（不是后台代理）：要有 Dock 图标、有主菜单、窗口能最小化。
+	     如果改回 true，App 就不进 Dock，也没有自己的菜单栏。 -->
 	<key>LSUIElement</key>
-	<true/>
+	<false/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
