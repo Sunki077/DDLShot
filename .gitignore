@@ -7,6 +7,9 @@ dist/
 *.swiftmodule/
 *.swiftsourceinfo
 
+# 图标是 build.sh 用 Tools/make_icon.swift 现画的，源码才是唯一事实源
+Resources/AppIcon.icns
+
 # ── 签名材料与私密凭据（绝不入库）─────────────────────────
 # 自签名证书的私钥 / p12 / 证书文件
 *.key

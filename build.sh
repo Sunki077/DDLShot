@@ -66,11 +66,20 @@ swiftc -O \
   -framework Carbon \
   -framework ScreenCaptureKit
 
+echo "==> 生成 App 图标"
+# 用 SF Symbols 现画一张 .icns：仓库里只存源码，clone 下来就能复现同一张图标。
+swiftc -O "$ROOT/Tools/make_icon.swift" -o "$ROOT/build/make_icon" 2>/dev/null
+"$ROOT/build/make_icon" "$ROOT/Resources" | sed 's/^/    /'
+
 echo "==> 写入 Info.plist 与抽取器脚本"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP/Contents/Info.plist"
 cp "$ROOT/Sources/ddlshot_llm.py" "$APP/Contents/Resources/ddlshot_llm.py"
 chmod +x "$APP/Contents/Resources/ddlshot_llm.py"
+if [ -f "$ROOT/Resources/AppIcon.icns" ]; then
+  cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+  echo "    图标已装入 bundle"
+fi
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 echo "    Bundle ID: $BUNDLE_ID"
 echo "$BUNDLE_ID" > "$ROOT/build/.bundle_id"

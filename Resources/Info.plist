@@ -9,6 +9,8 @@
 	<!-- 构建时会被 build.sh 用 PlistBuddy 覆盖成本机实际的 bundle id -->
 	<key>CFBundleIdentifier</key>
 	<string>app.ddlshot.mac</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleExecutable</key>
 	<string>DDLShot</string>
 	<key>CFBundlePackageType</key>

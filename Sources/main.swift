@@ -124,7 +124,8 @@ final class MenuBarController: NSObject {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
-            let img = NSImage(systemSymbolName: "bell.badge", accessibilityDescription: "DDLShot")
+            // 用和 App 图标一致的取景框符号，语义统一
+            let img = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "DDLShot")
             btn.image = img
             btn.image?.isTemplate = true
             btn.toolTip = "DDLShot — 截屏识别 DDL（⌃⌥D）"
@@ -136,22 +137,13 @@ final class MenuBarController: NSObject {
     private func buildMenu() -> NSMenu {
         let m = NSMenu()
         add(m, "显示控制面板", #selector(showPanel))
-        add(m, "测试全局热键", #selector(testHotkey))
-        m.addItem(.separator())
-        add(m, "截取最前窗口并记录 DDL", #selector(captureWindow))
+        // 「截取最前窗口 / 手动框选 / 解析剪贴板」面板上都有按钮，菜单里不再重复；
+        // 只有「整个屏幕」是面板没有的能力，所以留在这里。
         add(m, "截取整个屏幕并记录 DDL", #selector(captureScreen))
-        add(m, "手动框选区域并记录 DDL", #selector(captureInteractive))
-        add(m, "解析剪贴板文字并记录 DDL", #selector(parseClipboard))
-        m.addItem(.separator())
-        add(m, "大模型识别最前窗口", #selector(llmCaptureWindow))
-        add(m, "大模型识别整个屏幕", #selector(llmCaptureScreen))
         let engItem = NSMenuItem(title: "引擎：\(engineTitle)", action: #selector(toggleEngine), keyEquivalent: "")
         engItem.target = self
         m.addItem(engItem)
         m.addItem(.separator())
-        let listItem = NSMenuItem(title: "清单名：\(cfg.listName)", action: nil, keyEquivalent: "")
-        listItem.isEnabled = false
-        m.addItem(listItem)
         add(m, "打开提醒事项", #selector(openReminders))
         add(m, "关于 / 权限自检", #selector(showAbout))
         m.addItem(.separator())
@@ -177,8 +169,6 @@ final class MenuBarController: NSObject {
     @objc private func captureScreen() { runCLI(["--screen"]) }
     @objc private func captureInteractive() { runCLI(["--interactive"]) }
     @objc private func parseClipboard() { runCLI(["--clipboard"]) }
-    @objc private func llmCaptureWindow() { runCLI(["--capture", "--engine", "llm"]) }
-    @objc private func llmCaptureScreen() { runCLI(["--screen", "--engine", "llm"]) }
 
     @objc private func toggleEngine() {
         let c = LLMConfig.load()
@@ -268,9 +258,35 @@ final class MenuBarController: NSObject {
         if panel == nil {
             panel = makePanel()
         }
+        // 万一窗口被拖到屏幕外（这个 App 没有 Dock 图标、菜单栏图标在这台 macOS 26 上
+        // 又不显示，一旦飘出去就再也找不回来），先夹回可见区域再显示。
+        if let p = panel { clampOnScreen(p) }
         panel?.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         refreshPanelStatus()
+    }
+
+    /// 把窗口夹回屏幕可见区域，至少留一部分在屏幕里
+    private func clampOnScreen(_ w: NSWindow) {
+        guard let screen = w.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        var f = w.frame
+        let minVisibleX: CGFloat = 90
+        let minVisibleY: CGFloat = 50
+
+        if f.maxX < visible.minX + minVisibleX {
+            f.origin.x = visible.minX + minVisibleX - f.width
+        } else if f.minX > visible.maxX - minVisibleX {
+            f.origin.x = visible.maxX - minVisibleX
+        }
+        if f.maxY < visible.minY + minVisibleY {
+            f.origin.y = visible.minY + minVisibleY - f.height
+        } else if f.minY > visible.maxY - minVisibleY {
+            f.origin.y = visible.maxY - minVisibleY
+        }
+        if f.origin != w.frame.origin {
+            w.setFrameOrigin(f.origin)
+        }
     }
 
     private func makePanel() -> NSPanel {
@@ -299,6 +315,7 @@ final class MenuBarController: NSObject {
         if UserDefaults.standard.string(forKey: "NSWindow Frame DDLShotPanel") == nil {
             p.center()
         }
+        clampOnScreen(p)
         return p
     }
 
@@ -308,14 +325,29 @@ final class MenuBarController: NSObject {
         let contentW = width - margin * 2
         var y = height - margin
 
-        // 标题
+        // 标题（左边配一个 App 图标）
+        let iconSide: CGFloat = 38
+        let appIcon: NSImage? = {
+            if let img = NSApp.applicationIconImage, img.size.width > 1 { return img }
+            if let p = Bundle.main.path(forResource: "AppIcon", ofType: "icns") {
+                return NSImage(contentsOfFile: p)
+            }
+            return nil
+        }()
+        if let appIcon {
+            let iv = NSImageView(frame: NSRect(x: margin, y: y - 33, width: iconSide, height: iconSide))
+            iv.image = appIcon
+            iv.imageScaling = .scaleProportionallyUpOrDown
+            v.addSubview(iv)
+        }
+        let textX = margin + 50
         let title = makeLabel("DDLShot", size: 26, weight: .bold, color: .labelColor)
-        title.frame = NSRect(x: margin, y: y - 32, width: contentW, height: 32)
+        title.frame = NSRect(x: textX, y: y - 32, width: contentW - 50, height: 32)
         v.addSubview(title)
         y -= 32
 
         let sub = makeLabel("截屏 → 识别 DDL → 写入「提醒事项」", size: 13, weight: .regular, color: .secondaryLabelColor)
-        sub.frame = NSRect(x: margin, y: y - 20, width: contentW, height: 20)
+        sub.frame = NSRect(x: textX, y: y - 20, width: contentW - 50, height: 20)
         v.addSubview(sub)
         y -= 20 + 16
 

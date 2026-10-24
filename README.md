@@ -345,7 +345,18 @@ Swift 侧把 key 放进子进程的环境变量（`DDLSHOT_LLM_API_KEY`），
 > 位置会被记住（下次打开还在你上次放的地方）。
 > 再次唤出面板：双击 `DDLShot.app`（App 已在运行时 macOS 会发 reopen 事件把它叫出来）。
 
-菜单里还有「打开提醒事项」「关于 / 权限自检」「测试全局热键」「退出 DDLShot」。
+菜单栏图标（如果系统肯渲染）里的菜单也做了精简，只留 6 项：
+
+| 菜单项 | 说明 |
+|---|---|
+| 显示控制面板 | 把面板叫出来 |
+| 截取整个屏幕并记录 DDL | 面板上唯一没有的能力 |
+| 引擎：大模型（…） | 显示当前供应商/模型，点它能看全部可切换的 provider |
+| 打开提醒事项 | 直接跳到系统「提醒事项」 |
+| 关于 / 权限自检 | 版本号 + 权限状态 |
+| 退出 DDLShot | 退出 |
+
+（面板上已有的「截取最前窗口 / 手动框选 / 解析剪贴板」不再在菜单里重复出现。）
 
 ---
 
@@ -415,10 +426,12 @@ DDLShot/
 ├── Resources/
 │   ├── Info.plist              # 权限说明文案、LSUIElement
 │   ├── ddlshot-config.example.json   # 大模型配置模板
+│   ├── AppIcon-ai.png          # 备选图标（AI 生成版，见下方「图标」）
 │   └── samples/                # 样例图（README 里那张群聊截图）
 ├── Tools/
 │   ├── make_signing_cert.sh    # 为本机生成自签名代码签名证书
 │   ├── make_release.sh         # 导出干净源码快照并打 zip
+│   ├── make_icon.swift         # 用 SF Symbols 现画 App 图标（.icns）
 │   ├── mockapi.py              # 假 LLM 服务（没 key 也能测全链路）
 │   ├── make_sample.swift       # 生成清单样例图
 │   ├── make_chat.swift         # 生成群聊样例图（rule vs llm 对比用）
@@ -637,6 +650,21 @@ button.window = Optional((637.0, 923.0, 70.0, 33.0))   ← 窗口坐标真实存
 
 > 教训：**「注册成功」是状态，不是证据。** 想要证据，就得让系统把「发生了什么」写下来。
 > DDLShot 因此把热键诊断日志做成一等功能，而不是等用户说「没反应」再去猜。
+
+---
+
+## 图标
+
+App 图标不是一张打包进来的图片，而是**用 SF Symbols 现画**的（`Tools/make_icon.swift`）：
+
+- 仓库里只有源码，clone 下来 `./build.sh` 就能得到一模一样的 `.icns`，不用维护二进制资源
+- 每个尺寸**原生重画**（不是从 1024 缩下来），所以 16px 的菜单栏尺寸也是锐的
+- 16px 用手绘的四个粗角标（SF Symbol 的细角括号在这个尺寸必糊），大尺寸用 SF Symbol 的 `viewfinder` + 绿色对勾徽章
+
+想换成别的图标：把图片放进 `Resources/`，在 `build.sh` 里改成直接拷贝即可。
+
+`Resources/AppIcon-ai.png` 是一版 AI 生成的备选（蓝色渐变 + 取景框 + 对勾），
+喜欢的话可以拿它替换 `Tools/make_icon.swift` 的产出。
 
 ---
 
