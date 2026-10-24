@@ -1,0 +1,62 @@
+# ── 构建产物 ───────────────────────────────────────────────
+build/
+dist/
+*.app/
+*.dSYM/
+*.o
+*.swiftmodule/
+*.swiftsourceinfo
+
+# ── 签名材料与私密凭据（绝不入库）─────────────────────────
+# 自签名证书的私钥 / p12 / 证书文件
+*.key
+*.p12
+*.crt
+*.pem
+*.cer
+*.certSigningRequest
+# 公钥指纹不算秘密，但为免混淆也不入库
+cert.sha1
+
+# ── 本地私密配置 ──────────────────────────────────────────
+# 用户的真实大模型配置（含 API Key）永远不进仓库
+config.json
+*.local.json
+*.local.sh
+.env
+.env.*
+
+# ── macOS ─────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.DocumentRevisions-V100
+
+# ── 编辑器 / IDE ──────────────────────────────────────────
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+*.swiftpm/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# ── 运行时产物 ────────────────────────────────────────────
+*.log
+*.png
+!Resources/**/*.png
+!Tools/**/*.png

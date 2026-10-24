@@ -1,0 +1,4 @@
+module CShim {
+    header "include/ddlshot_hotkey.h"
+    export *
+}

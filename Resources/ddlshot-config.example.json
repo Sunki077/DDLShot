@@ -1,0 +1,28 @@
+{
+  "_说明": "把 provider 改成下面任意 id 即可切换大模型服务商；base_url / model / protocol 会自动补上，你只要填 api_key。完整列表跑 DDLShot --list-providers。",
+  "_可选的 provider": [
+    "minimax（Anthropic 兼容，默认）",
+    "minimax-openai",
+    "deepseek",
+    "openai",
+    "qwen（阿里云百炼）",
+    "zhipu（智谱 GLM）",
+    "moonshot（月之暗面 Kimi）",
+    "doubao（火山方舟，需自己填 endpoint id）",
+    "siliconflow（硅基流动）",
+    "gemini（需能连外网）",
+    "ollama（本机，需先 ollama pull qwen2.5vl）",
+    "custom（自己填 base_url）"
+  ],
+  "llm": {
+    "provider": "minimax",
+    "api_key": "把你的 API Key 填在这里",
+    "model": "",
+    "base_url": "",
+    "protocol": "",
+    "timeout": 120,
+    "default_hour": 9,
+    "fallback_to_text": true
+  },
+  "hotkey": "ctrl+alt+d"
+}

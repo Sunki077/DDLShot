@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>DDLShot</string>
+	<key>CFBundleDisplayName</key>
+	<string>DDLShot</string>
+	<!-- 构建时会被 build.sh 用 PlistBuddy 覆盖成本机实际的 bundle id -->
+	<key>CFBundleIdentifier</key>
+	<string>app.ddlshot.mac</string>
+	<key>CFBundleExecutable</key>
+	<string>DDLShot</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>DDLShot — 本地截屏识别 DDL，自动写入系统提醒事项</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>DDLShot 需要「提醒事项」的完全访问权限，才能把截图中识别到的任务名与截止日期写进你的 DDL 清单。</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>DDLShot 需要访问「提醒事项」，才能把截图中识别到的任务名与截止日期写进你的 DDL 清单。</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>DDLShot 需要屏幕录制权限，才能截取窗口画面并识别其中的任务与截止日期。</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>DDLShot 使用系统通知来提示你「已加入提醒事项」。</string>
+</dict>
+</plist>
