@@ -283,9 +283,22 @@ final class MenuBarController: NSObject {
         p.titleVisibility = .hidden
         p.isMovableByWindowBackground = true
         p.hidesOnDeactivate = false
-        p.level = .floating
+        p.isReleasedWhenClosed = false
+
+        // ⚠️ 千万别用 .floating：那会让面板**永远压在别的 App 窗口上面**，
+        // 切到任何窗口都被它挡住，非常影响体验。
+        // 普通层级下：切走之后它老老实实待在后面，跟普通窗口一个待遇。
+        p.level = .normal
+        // 别用 .canJoinAllSpaces（那会让它出现在每个桌面上），
+        // 只跟着当前空间走就行。
+        p.collectionBehavior = [.moveToActiveSpace]
         p.contentView = buildPanelContent(width: w, height: h)
-        p.center()
+
+        // 记住上次摆放的位置；第一次打开才居中
+        p.setFrameAutosaveName("DDLShotPanel")
+        if UserDefaults.standard.string(forKey: "NSWindow Frame DDLShotPanel") == nil {
+            p.center()
+        }
         return p
     }
 
