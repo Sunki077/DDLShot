@@ -36,10 +36,11 @@ echo "==> 2/3 扫描个人痕迹"
 FOUND=0
 if grep -rn -I \
     -e '/Users/' \
-    -e "$USER" \
+    -e "$HOME" \
+    -e 'sunki' \
     --include='*.swift' --include='*.py' --include='*.h' --include='*.sh' \
     --include='*.plist' --include='*.json' --include='*.md' \
-    "$STAGE" 2>/dev/null | grep -v "^\$STAGE/README.md" | head -20; then
+    "$STAGE" 2>/dev/null | grep -v "Tools/make_release.sh" | head -20; then
   FOUND=1
 fi
 if [ "$FOUND" = "1" ]; then

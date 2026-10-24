@@ -1,10 +1,17 @@
-// HotKey.swift — 全局热键（双通道）
+// HotKey.swift — 全局热键（三通道 + 可读诊断日志）
 //
-// 为什么要有两条通道：
-//   ① Carbon RegisterEventHotKey —— 不需要任何系统权限，但属于 1990 年代的 API。
-//   ② NSEvent.addGlobalMonitorForEvents —— 现代 API，macOS 26 上可靠，
-//      但需要「辅助功能」授权。
-// 两条路都指向同一个触发处理；辅助功能没授权时自动退回 Carbon。
+// 为什么要有三条通道（实测结论，不是预防性编程）：
+//   ① Carbon RegisterEventHotKey —— 在 macOS 26 上**注册返回 0、ref 也非空，但事件永远不派发**。
+//      状态行显示「已注册」完全是误导，所以它只能当兜底，不能当主力。
+//   ② NSEvent.addGlobalMonitorForEvents / addLocalMonitorForEvents —— 需要「辅助功能」授权。
+//      能收到大多数组合键，但**如果别的 App 用 local monitor 抢占了同一个键，
+//      这里就收不到**（实测 ⌃⌥D 就是这样被抢的，而 ⌃⌥F 没被抢就能收到）。
+//   ③ CGEventTap（session 级）—— 位于事件分发链最上游，**抢不走**，是最可靠的主力通道。
+//      需要「辅助功能」或「输入监控」权限。
+//
+// 实测（macOS 26.6.2）：
+//   按 ⌃⌥D → 只有 CGEventTap 记录到 keyCode=0x02，Carbon 回调从未被调用 → 走 ③ 触发 ✅
+//   按 ⌃⌥F → CGEventTap 与全局监听都记录到 keyCode=0x03，且因为不是 D 而不触发 → 证明键码没错
 //
 // 键码约定（ANSI / 美国键盘布局）：
 //   系统里 kVK_ANSI_D == 0x02，**不是 0x27**（0x27 是单引号 '）。
@@ -12,6 +19,42 @@
 import AppKit
 import ApplicationServices
 import CShim
+
+// MARK: - 诊断日志
+
+/// 热键诊断日志：写到 ~/Library/Logs/DDLShot/hotkey.log
+/// （NSLog 在 launchd 拉起的 GUI 进程里不一定进得了统一日志，文件更可靠）
+public enum HotKeyLog {
+    public static let path: String = {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DDLShot")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("hotkey.log").path
+    }()
+
+    private static let queue = DispatchQueue(label: "ddlshot.hotkey.log")
+
+    public static func write(_ message: String) {
+        let line = "[\(DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium))] \(message)\n"
+        queue.sync {
+            if let data = line.data(using: .utf8) {
+                if let fh = try? FileHandle(forWritingTo: URL(fileURLWithPath: path)) {
+                    defer { try? fh.close() }
+                    fh.seekToEndOfFile()
+                    fh.write(data)
+                } else {
+                    try? line.write(toFile: path, atomically: false, encoding: .utf8)
+                }
+            }
+        }
+        NSLog("DDLShot[hotkey]: %@", message)
+    }
+
+    /// 追加一行「最近发生过什么」，方便回看
+    public static func trace(_ message: String) {
+        write(message)
+    }
+}
 
 // MARK: - 组合键
 
@@ -163,6 +206,37 @@ public struct HotKeyCombo: Equatable {
             && f.contains(.shift) == shift
             && f.contains(.command) == command
     }
+
+    /// CGEvent 的修饰键原始掩码（与 Carbon 的掩码不是一回事，定义见 ddlshot_hotkey.h）
+    public enum CGMask {
+        public static let shift: UInt64     = UInt64(DDLHotKeyMaskShift)
+        public static let control: UInt64   = UInt64(DDLHotKeyMaskControl)
+        public static let alternate: UInt64 = UInt64(DDLHotKeyMaskAlternate)
+        public static let command: UInt64   = UInt64(DDLHotKeyMaskCommand)
+    }
+
+    /// 是否与某个 CGEvent 精确匹配（只看四个修饰键的原始掩码）
+    public func matches(_ event: CGEvent) -> Bool {
+        guard event.getIntegerValueField(.keyboardEventKeycode) == Int64(keyCode) else { return false }
+        let raw = event.flags.rawValue
+        let has: (UInt64) -> Bool = { raw & $0 != 0 }
+        return has(CGMask.control) == control
+            && has(CGMask.alternate) == option
+            && has(CGMask.shift) == shift
+            && has(CGMask.command) == command
+    }
+
+    /// 把一组标志位渲染成人话，用于日志
+    public static func describe(_ f: NSEvent.ModifierFlags) -> String {
+        var s = ""
+        if f.contains(.control) { s += "⌃" }
+        if f.contains(.option) { s += "⌥" }
+        if f.contains(.shift) { s += "⇧" }
+        if f.contains(.command) { s += "⌘" }
+        if f.contains(.capsLock) { s += "⇪" }
+        if s.isEmpty { s = "（无修饰键）" }
+        return s
+    }
 }
 
 // MARK: - 配置读取
@@ -198,12 +272,18 @@ public final class HotKeyManager {
     private var carbonRef: DDLHotKeyRef?
     private var globalMonitor: Any?
     private var localMonitor: Any?
+    private var eventTap: CFMachPort?
+    private var eventTapSource: CFRunLoopSource?
     private var trustTimer: Timer?
     private(set) public var combo: HotKeyCombo = .default
     /// Carbon 注册返回的 OSStatus（0 = 成功）
     public private(set) var carbonStatus: Int32 = -1
     /// 辅助功能监听是否已装上
     public private(set) var accessibilityActive = false
+    /// CGEventTap 是否已装上
+    public private(set) var eventTapActive = false
+    /// 最近一次触发来自哪条通道
+    public private(set) var lastSource: String?
 
     private init() {}
 
@@ -211,10 +291,14 @@ public final class HotKeyManager {
 
     public func start(combo: HotKeyCombo) {
         self.combo = combo
+        HotKeyLog.write("=== DDLShot 热键启动 ===")
+        HotKeyLog.write("组合键 = \(combo.display)  keyCode=0x\(String(format: "%02X", combo.keyCode))  配置串=\(combo.configString)")
         carbonStatus = registerCarbon(combo)
         if accessibilityActive { removeAccessibilityMonitor() }
         installAccessibilityMonitorIfTrusted()
+        installEventTapIfTrusted()
         startTrustPolling()
+        HotKeyLog.write("启动完成：\(statusText)")
     }
 
     /// 注册 Carbon 热键。返回 OSStatus，0 表示成功。
@@ -230,7 +314,7 @@ public final class HotKeyManager {
         carbonStatus = status
         // 运行时自检：把键码翻译成字符打出来，键码写错时一眼能看出来
         let ch = HotKeyManager.character(of: combo.keyCode) ?? "?"
-        NSLog("DDLShot: 注册热键 \(combo.display) 键码=0x\(String(format: "%02X", combo.keyCode)) → 字符「\(ch)」 status=\(status)")
+        HotKeyLog.write("Carbon 注册：\(combo.display) keyCode=0x\(String(format: "%02X", combo.keyCode)) 字符「\(ch)」 status=\(status) ref=\(ref == nil ? "nil" : "ok")")
         return status
     }
 
@@ -246,6 +330,8 @@ public final class HotKeyManager {
 
     /// 触发处理
     public func fire(source: String) {
+        lastSource = source
+        HotKeyLog.write("🔥 触发：\(source)  组合键=\(combo.display)")
         onFire?(source)
     }
 
@@ -274,17 +360,20 @@ public final class HotKeyManager {
         let c = combo
         // 全局监听：App 不是前台时生效
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { event in
+            HotKeyManager.logKeyEvent("全局监听", event)
             guard c.matches(event) else { return }
-            DispatchQueue.main.async { HotKeyManager.shared.fire(source: "辅助功能监听") }
+            DispatchQueue.main.async { HotKeyManager.shared.fire(source: "辅助功能·全局监听") }
         }
         // 本地监听：App 自己是前台时生效（全局监听此时收不到）
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { event in
+            HotKeyManager.logKeyEvent("本地监听", event)
             if c.matches(event) {
-                DispatchQueue.main.async { HotKeyManager.shared.fire(source: "辅助功能监听") }
+                DispatchQueue.main.async { HotKeyManager.shared.fire(source: "辅助功能·本地监听") }
             }
             return event
         }
         accessibilityActive = (globalMonitor != nil)
+        HotKeyLog.write("辅助功能监听已安装：全局=\(globalMonitor != nil) 本地=\(localMonitor != nil)")
     }
 
     private func removeAccessibilityMonitor() {
@@ -295,12 +384,75 @@ public final class HotKeyManager {
         accessibilityActive = false
     }
 
+    /// 只记录「带修饰键的」或「正好是我们目标键」的按键，避免日志被普通打字刷屏
+    private static func logKeyEvent(_ channel: String, _ event: NSEvent) {
+        let f = event.modifierFlags
+        let interesting = f.contains(.control) || f.contains(.option) || f.contains(.command)
+            || UInt32(event.keyCode) == HotKeyManager.shared.combo.keyCode
+        guard interesting else { return }
+        let ch = HotKeyManager.character(of: UInt32(event.keyCode)) ?? "?"
+        HotKeyLog.write("按键到达[\(channel)]：keyCode=0x\(String(format: "%02X", UInt32(event.keyCode))) 字符「\(ch)」 修饰键=\(HotKeyCombo.describe(f))")
+    }
+
+    // MARK: CGEventTap 通道（最可靠）
+
+    /// 装一个 session 级事件 tap。需要「辅助功能」或「输入监控」权限。
+    private func installEventTapIfTrusted() {
+        guard eventTap == nil, accessibilityGranted else { return }
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, _ in
+            if type == .keyDown {
+                HotKeyManager.logCGEvent(event)
+                if HotKeyManager.shared.combo.matches(event) {
+                    DispatchQueue.main.async { HotKeyManager.shared.fire(source: "CGEventTap") }
+                }
+            }
+            return Unmanaged.passUnretained(event)
+        }
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap,
+                                          place: .headInsertEventTap,
+                                          options: .listenOnly,
+                                          eventsOfInterest: mask,
+                                          callback: callback,
+                                          userInfo: nil) else {
+            HotKeyLog.write("CGEventTap 创建失败（通常是缺「辅助功能」或「输入监控」权限）")
+            return
+        }
+        let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        eventTap = tap
+        eventTapSource = src
+        eventTapActive = true
+        HotKeyLog.write("CGEventTap 已安装（session 级，监听 keyDown）")
+    }
+
+    private static func logCGEvent(_ event: CGEvent) {
+        let code = event.getIntegerValueField(.keyboardEventKeycode)
+        let raw = event.flags.rawValue
+        let ctrl = raw & HotKeyCombo.CGMask.control != 0
+        let alt = raw & HotKeyCombo.CGMask.alternate != 0
+        let sh = raw & HotKeyCombo.CGMask.shift != 0
+        let cmd = raw & HotKeyCombo.CGMask.command != 0
+        let interesting = ctrl || alt || cmd || UInt32(code) == HotKeyManager.shared.combo.keyCode
+        guard interesting else { return }
+        var s = ""
+        if ctrl { s += "⌃" }
+        if alt { s += "⌥" }
+        if sh { s += "⇧" }
+        if cmd { s += "⌘" }
+        if s.isEmpty { s = "（无修饰键）" }
+        let ch = HotKeyManager.character(of: UInt32(code)) ?? "?"
+        HotKeyLog.write("按键到达[CGEventTap]：keyCode=0x\(String(format: "%02X", UInt32(code))) 字符「\(ch)」 修饰键=\(s)")
+    }
+
     // MARK: 状态描述
 
     public var statusText: String {
         var parts: [String] = []
         parts.append(carbonStatus == 0 ? "Carbon 已注册" : "Carbon 注册失败(\(carbonStatus))")
         parts.append(accessibilityActive ? "辅助功能监听已启用" : "辅助功能未授权")
+        parts.append(eventTapActive ? "事件 tap 已启用" : "事件 tap 未启用")
         return parts.joined(separator: " · ")
     }
 }

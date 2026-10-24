@@ -438,7 +438,8 @@ final class MenuBarController: NSObject {
         let combo = HotKeyManager.shared.combo
         let carbonOK = HotKeyManager.shared.carbonStatus == 0
         let axOK = HotKeyManager.shared.accessibilityActive
-        hotkeyLabel?.stringValue = "热键：\(combo.display)（\(carbonOK ? "Carbon 已注册" : "Carbon 失败") · \(axOK ? "辅助功能已启用" : "辅助功能未授权")）"
+        let tapOK = HotKeyManager.shared.eventTapActive
+        hotkeyLabel?.stringValue = "热键：\(combo.display)（Carbon \(carbonOK ? "已注册" : "失败") · 监听 \(axOK ? "已启用" : "未授权") · tap \(tapOK ? "已启用" : "未启用")）"
         accessibilityButton?.isHidden = axOK
     }
 
@@ -547,7 +548,7 @@ final class MenuBarController: NSObject {
                 t.invalidate()
                 self.hotkeyTestTimer = nil
                 self.hotkeyTestDeadline = nil
-                self.setResult("❌ 10 秒内没收到 \(combo.display)。看下面的热键状态行，或点「辅助功能授权」后再试。", ok: false)
+                self.setResult("❌ 10 秒内没收到 \(combo.display)。看下面的热键状态行，或点「辅助功能授权」后再试。诊断日志：\(HotKeyLog.path)", ok: false)
             }
         }
     }

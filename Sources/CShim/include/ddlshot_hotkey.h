@@ -69,4 +69,16 @@ extern void UnregisterEventHotKey(DDLHotKeyRef inHotKey);
 #define DDLHotKeyModifierShift            0x0200U   /* shiftKey            */
 #define DDLHotKeyModifierCommand            0x0100U   /* cmdKey              */
 
+/*
+ * CGEvent 的**原始**修饰键掩码（kCGEventFlagMask*）。
+ * 注意：这些和上面的 Carbon 掩码不是一回事，别混用。
+ *   Carbon: cmd=0x0100 shift=0x0200 option=0x0800 ctrl=0x1000
+ *   CGEvent: shift=0x00020000 ctrl=0x00040000 alt=0x00080000 cmd=0x00100000
+ * 放在头文件里，是为了让 HotKey.swift 与 Tools/test_hotkey 共用同一份定义。
+ */
+#define DDLHotKeyMaskShift                  0x00020000U
+#define DDLHotKeyMaskControl                0x00040000U
+#define DDLHotKeyMaskAlternate              0x00080000U
+#define DDLHotKeyMaskCommand                0x00100000U
+
 #endif /* DDLSHOT_HOTKEY_H */
