@@ -99,6 +99,8 @@ final class MenuBarController: NSObject {
     private var syncLabel: NSTextField?
     private var hotkeyLabel: NSTextField?
     private var accessibilityButton: NSButton?
+    /// 当前正在显示的失败弹窗（用于防止连按热键时叠一堆 modal）
+    private var activeAlert: NSAlert? = nil
 
     func start() {
         setupStatusItem()
@@ -582,7 +584,14 @@ final class MenuBarController: NSObject {
             let code = await cli.run()
             let err = CLI.lastError
             await MainActor.run {
-                if code != 0 {
+                if code == 4 {
+                    // 「这次没找到内容」不是错误 —— 不弹窗打断，在面板里说清楚就行。
+                    // 之前它和真错误共用退出码 1，走 modal 弹窗：
+                    // modal 会卡住整个 App 的事件循环，连按几次热键就叠好几个弹窗，
+                    // 用户不点 OK 就一直挡在屏幕前面。
+                    self.setResult("这次没识别出带截止时间的待办，换张有明确日期的截图再试。", ok: false)
+                    self.notify("没识别到 DDL", "画面里没有带截止时间的待办")
+                } else if code != 0 {
                     self.setResult(err ?? "执行失败（退出码 \(code)）", ok: false)
                     self.showFailure(code: code)
                 } else {
@@ -594,6 +603,11 @@ final class MenuBarController: NSObject {
 
     /// 失败弹窗：直接展示真实原因，并按权限类型分流
     private func showFailure(code: Int32) {
+        // 已经有弹窗在显示时就不再叠一个 ——
+        // 连按几次热键会连着失败，几个 modal 弹窗叠起来能把整个屏幕挡死，
+        // 而且 modal 会跑嵌套事件循环，App 的其他事件全在排队。
+        if let a = activeAlert, a.window.isVisible { return }
+
         let al = NSAlert()
         al.messageText = "DDLShot 执行失败"
         var body = CLI.lastError?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -606,7 +620,9 @@ final class MenuBarController: NSObject {
             extra += "\n屏幕录制权限未开 → 系统设置 → 隐私与安全性 → 录屏与系统录音"
         }
         al.informativeText = body + extra
+        activeAlert = al
         al.runModal()
+        activeAlert = nil
     }
 
     // MARK: 通知
