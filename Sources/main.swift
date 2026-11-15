@@ -96,6 +96,7 @@ final class MenuBarController: NSObject {
     private var engineLabel: NSTextField?
     private var reminderLabel: NSTextField?
     private var screenLabel: NSTextField?
+    private var syncLabel: NSTextField?
     private var hotkeyLabel: NSTextField?
     private var accessibilityButton: NSButton?
 
@@ -261,7 +262,11 @@ final class MenuBarController: NSObject {
         // 万一窗口被拖到屏幕外（这个 App 没有 Dock 图标、菜单栏图标在这台 macOS 26 上
         // 又不显示，一旦飘出去就再也找不回来），先夹回可见区域再显示。
         if let p = panel { clampOnScreen(p) }
-        panel?.orderFrontRegardless()
+        // 必须用 makeKeyAndOrderFront，不能用 orderFrontRegardless ——
+        // 后者只保证窗口显示出来，**不会**让它成为 key window。
+        // App 已经在前台时（比如第二次从 Dock 点开），面板就不是 key window，
+        // macOS 会把主按钮画成灰色，用户看着像不能用；⌘W / ⌘M 也会失效。
+        panel?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         refreshPanelStatus()
     }
@@ -454,6 +459,13 @@ final class MenuBarController: NSObject {
         screenLabel = screen
         y -= 19
 
+        // iCloud 同步自检：直接回答「为什么手机上看不到」
+        let sync = makeLabel("", size: 12, weight: .regular, color: .secondaryLabelColor)
+        sync.frame = NSRect(x: margin, y: y - 17, width: contentW, height: 17)
+        v.addSubview(sync)
+        syncLabel = sync
+        y -= 19
+
         let hotkey = makeLabel("", size: 12, weight: .regular, color: .secondaryLabelColor)
         hotkey.frame = NSRect(x: margin, y: y - 17, width: contentW, height: 17)
         v.addSubview(hotkey)
@@ -538,6 +550,11 @@ final class MenuBarController: NSObject {
         engineLabel?.stringValue = "引擎：\(engine)"
         reminderLabel?.stringValue = "提醒事项：\(Permissions.remindersGranted ? "已授权 ✅" : "未授权 ✗（系统设置 → 隐私与安全性 → 提醒事项）")"
         screenLabel?.stringValue = "屏幕录制：\(Permissions.screenCaptureGranted ? "已授权 ✅" : "未授权 ✗（系统设置 → 隐私与安全性 → 录屏与系统录音）")"
+
+        // 同步自检：清单在不在 iCloud、有没有 iCloud 账户、提醒事项服务开没开
+        let ss = Reminders.syncStatus(listName: cfg.listName)
+        syncLabel?.stringValue = "iCloud 同步：\(ss.shortSummary)"
+        syncLabel?.textColor = ss.isICloud && ss.remindersServiceEnabled ? .secondaryLabelColor : .systemOrange
 
         let combo = HotKeyManager.shared.combo
         let carbonOK = HotKeyManager.shared.carbonStatus == 0

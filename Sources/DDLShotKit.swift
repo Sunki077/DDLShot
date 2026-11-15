@@ -673,24 +673,210 @@ public enum Reminders {
         return s
     }
 
+    // MARK: - 去重
+
+    /// 标题标准化：用来判断两条待办是不是同一件事。
+    /// 全角转半角、连续空白压成一个、去首尾空白与尾部标点、忽略大小写。
+    public static func normalizeTitle(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 先剥一轮中文/全角标点，再做半角化 —— 因为半角化会把「。」变成「｡」，
+        // 不先剥的话，转换完尾部就剩一个奇怪的半角句点，剥不干净。
+        s = stripTrailingPunctuation(s)
+        s = s.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? s
+        s = stripTrailingPunctuation(s)
+        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return s.lowercased()
+    }
+
+    /// 去掉尾部的句末标点和空白（成对符号如「」『』不剥，剥一半会破坏语义）
+    private static func stripTrailingPunctuation(_ input: String) -> String {
+        let punct = "。．｡.，,、；;：:！!？?~～—–-_ \t"
+        var s = input
+        while let last = s.last, punct.contains(last) {
+            s.removeLast()
+        }
+        return s
+    }
+
+    /// 到期日 → "2026-11-22"（**只到天**）
+    ///
+    /// 为什么只到天、不比到分钟：规则引擎对「只写日期不写时间」的 DDL 默认给 09:00，
+    /// 而大模型引擎会从截图里读出具体时间（实测有 23:55 / 23:59）。
+    /// 同一条 DDL 用不同引擎录两次，due 会差好几个小时 ——
+    /// 比到分钟就会漏判成两条不同的，必须比到「天」。
+    public static func dayKey(_ d: Date, cal: Calendar = .current) -> String {
+        let c = cal.dateComponents([.year, .month, .day], from: d)
+        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+    }
+
+    /// 目标清单里「未完成」条目的去重索引：标准化标题 → 该标题下出现过的到期日集合。
+    /// 集合里的 nil 表示「那条待办没写截止日期」。
+    ///
+    /// 已完成的条目不参与比对 —— 「第三章作业1」每学期都该能重新录一遍。
+    public static func existingIndex(in listName: String, store: EKEventStore) async throws -> [String: Set<String?>] {
+        guard let cal = store.calendars(for: .reminder)
+            .first(where: { $0.title.caseInsensitiveCompare(listName) == .orderedSame })
+        else { return [:] }
+        let items: [EKReminder] = try await withCheckedThrowingContinuation {
+            (cont: CheckedContinuation<[EKReminder], Error>) in
+            store.fetchReminders(matching: store.predicateForReminders(in: [cal])) { reminders in
+                cont.resume(returning: reminders ?? [])
+            }
+        }
+        var index: [String: Set<String?>] = [:]
+        for r in items where !r.isCompleted {
+            let t = normalizeTitle(r.title ?? "")
+            let day = r.dueDateComponents
+                .flatMap { Calendar.current.date(from: $0) }
+                .map { dayKey($0) }
+            index[t, default: []].insert(day)
+        }
+        return index
+    }
+
+    /// 把「一批待办」转成和 existingIndex 一样的结构，用来判批次内重复。
+    public static func batchIndex(_ items: [(String, Date?)]) -> [String: Set<String?>] {
+        var index: [String: Set<String?>] = [:]
+        for (t, d) in items {
+            index[normalizeTitle(t), default: []].insert(d.map { dayKey($0) })
+        }
+        return index
+    }
+
+    /// 是否算重复：标题相同，且（到期日相同，或有一方压根没写日期）。
+    ///
+    /// 「有一方没日期也算重复」是刻意的：DDLShot 偶尔会识别不出截止日期，
+    /// 那种情况下如果只比「标题+日期」，新条目的键里没有日期段，
+    /// 和清单里已有的条目永远对不上 —— 就会重复记入。
+    public static func isDuplicate(title: String, due: Date?,
+                                   index: [String: Set<String?>],
+                                   cal: Calendar = .current) -> Bool {
+        let t = normalizeTitle(title)
+        guard let days = index[t], !days.isEmpty else { return false }
+        if days.contains(nil) { return true }              // 已有同名条目没写日期
+        guard let due else { return true }                 // 新条目没识别出日期
+        return days.contains(dayKey(due, cal: cal))        // 同一天
+    }
+
+    // MARK: - iCloud 同步
+
+    /// 找 iCloud source —— 清单必须落在 iCloud 上，否则手机端永远等不到同步。
+    public static func iCloudSource(in store: EKEventStore) -> EKSource? {
+        if let s = store.sources.first(where: {
+            $0.sourceIdentifier == "iCloud" || $0.title.lowercased() == "icloud"
+        }) { return s }
+        // 有些系统上 iCloud source 的标题是本地化的（如「iCloud 云端」），
+        // 这时退而求其次看默认新建日历落在哪个 source 上。
+        if let d = store.defaultCalendarForNewReminders(),
+           d.source.title.lowercased().contains("icloud") { return d.source }
+        return nil
+    }
+
+    /// iCloud 账户 + 「提醒事项」服务开关
+    public static func iCloudAccountInfo() -> (hasAccount: Bool, remindersEnabled: Bool, accountName: String) {
+        var has = false, enabled = false, name = ""
+        if let d = UserDefaults(suiteName: "MobileMeAccounts"),
+           let accounts = d.array(forKey: "Accounts") as? [[String: Any]] {
+            for a in accounts {
+                has = true
+                if name.isEmpty {
+                    name = (a["AccountDisplayName"] as? String) ?? (a["AccountID"] as? String) ?? ""
+                }
+                for s in (a["Services"] as? [[String: Any]] ?? []) {
+                    guard (s["ServiceID"] as? String) == "com.apple.Dataclass.Reminders" else { continue }
+                    // 服务条目里用的是 Enabled（1/0），不是 status
+                    enabled = (s["Enabled"] as? Int) == 1
+                }
+            }
+        }
+        return (has, enabled, name)
+    }
+
+    /// 同步状态自检：直接回答「为什么手机上看不到」。
+    public struct SyncStatus {
+        public var listTitle: String = ""
+        public var sourceTitle: String = ""
+        public var isICloud: Bool = false
+        public var hasAccount: Bool = false
+        public var remindersServiceEnabled: Bool = false
+        public var accountName: String = ""
+        public var summary: String = ""
+        public var detail: String = ""
+        /// 面板用的短版本（面板宽度只有 380pt，长文案放不下）
+        public var shortSummary: String = ""
+    }
+
+    public static func syncStatus(listName: String, store: EKEventStore? = nil) -> SyncStatus {
+        var st = SyncStatus()
+        st.listTitle = listName
+        let acct = iCloudAccountInfo()
+        st.hasAccount = acct.hasAccount
+        st.remindersServiceEnabled = acct.remindersEnabled
+        st.accountName = acct.accountName
+
+        let es = store ?? EKEventStore()
+        // 注意：这里**不能**用 Reminders.store() —— 它在权限未授予时会弹授权框，
+        // 而且是同步等待（最多 60 秒），在主线程上调用会直接把面板卡死。
+        let auth = EKEventStore.authorizationStatus(for: .reminder)
+        guard auth == .fullAccess else {
+            st.summary = "ℹ️ 同步检测需要「提醒事项」权限"
+            st.detail = ""
+            st.shortSummary = "需先授权提醒事项"
+            return st
+        }
+        let all = es.calendars(for: .reminder)
+        if let cal = all.first(where: { $0.title.caseInsensitiveCompare(listName) == .orderedSame }) {
+            st.sourceTitle = cal.source.title
+            st.isICloud = cal.source.title.lowercased().contains("icloud")
+                || cal.source.sourceIdentifier == "iCloud"
+        } else {
+            st.sourceTitle = ""
+        }
+
+        if st.isICloud && st.remindersServiceEnabled {
+            st.summary = "✅ 清单「\(listName)」在 iCloud，会同步到手机"
+            st.detail = acct.accountName.isEmpty ? "" : "iCloud 账户：\(acct.accountName)"
+            st.shortSummary = "✅ 正常（会同步到手机）"
+        } else if st.isICloud {
+            st.summary = "⚠️ 清单在 iCloud，但 iCloud 的「提醒事项」服务被关了"
+            st.detail = "系统设置 → Apple 账户 → iCloud → 打开「提醒事项」"
+            st.shortSummary = "⚠️ iCloud 服务被关了"
+        } else if st.sourceTitle.isEmpty {
+            st.summary = "ℹ️ 清单「\(listName)」还不存在，下次录入时自动创建"
+            st.detail = acct.hasAccount
+                ? "会优先建到 iCloud 上，保证能同步到手机"
+                : "没检测到 iCloud 账户，清单会建到本地（不会同步到手机）"
+            st.shortSummary = "ℹ️ 清单尚未创建"
+        } else {
+            st.summary = "❌ 清单「\(listName)」在「\(st.sourceTitle)」上，不会同步到手机"
+            st.detail = "删掉这个清单重新创建，或到 系统设置 → Apple 账户 → iCloud 确认「提醒事项」已开启"
+            st.shortSummary = "❌ 清单在「\(st.sourceTitle)」，不同步"
+        }
+        return st
+    }
+
     /// 找到（或创建）指定名称的提醒事项清单
     public static func ensureList(_ name: String, store: EKEventStore) throws -> EKCalendar {
         let all = store.calendars(for: .reminder)
         if let c = all.first(where: { $0.title.caseInsensitiveCompare(name) == .orderedSame }) { return c }
         let cal = EKCalendar(for: .reminder, eventStore: store)
         cal.title = name
-        if let src = store.defaultCalendarForNewReminders()?.source ?? all.first?.source ?? store.sources.first {
-            cal.source = src
-        }
+        // **优先落 iCloud** —— 建到本地清单的话，手机端就再也等不到同步了
+        let src = iCloudSource(in: store)
+            ?? store.defaultCalendarForNewReminders()?.source
+            ?? all.first?.source
+            ?? store.sources.first
+        if let src { cal.source = src }
         try store.saveCalendar(cal, commit: true)
         return cal
     }
 
     @discardableResult
-    public static func add(title: String, due: Date?, notes: String, listName: String) throws -> String {
-        let store = try Reminders.store()
-        let cal = try ensureList(listName, store: store)
-        let rem = EKReminder(eventStore: store)
+    public static func add(title: String, due: Date?, notes: String, listName: String,
+                            store: EKEventStore? = nil) throws -> String {
+        let st = try (store ?? Reminders.store())
+        let cal = try ensureList(listName, store: st)
+        let rem = EKReminder(eventStore: st)
         rem.title = title.isEmpty ? "未命名 DDL" : title
         rem.calendar = cal
         if !notes.isEmpty { rem.notes = notes }
@@ -699,7 +885,7 @@ public enum Reminders {
             comps.second = 0
             rem.dueDateComponents = comps
         }
-        try store.save(rem, commit: true)
+        try st.save(rem, commit: true)
         return rem.calendarItemIdentifier
     }
 }
@@ -827,6 +1013,9 @@ public struct CLI {
             print("提醒事项权限：\(Permissions.remindersDescription())")
             let lists = EKEventStore().calendars(for: .reminder).map { $0.title }
             print("可见清单　：\(lists.isEmpty ? "(无 / 尚无权限)" : lists.joined(separator: "、"))")
+            let ss = Reminders.syncStatus(listName: cfg.listName)
+            print("iCloud 同步：\(ss.summary)")
+            if !ss.detail.isEmpty { print("　　　　　：\(ss.detail)") }
             print("屏幕录制权限：\(Permissions.screenCaptureGranted ? "已授权 ✅" : "未授权 ✗（系统设置 → 隐私与安全性 → 录屏与系统录音）")")
             let lcfg = loadLLMConfig()
             if let c = lcfg {
@@ -988,18 +1177,60 @@ public struct CLI {
 
         if dryRun { return 0 }
 
-        // ── 写入 ──
+        // ── 写入（带去重）──
         do {
-            var ids: [String] = []
-            for p in parsed {
-                let id = try Reminders.add(title: p.title, due: p.due, notes: p.notes, listName: cfg.listName)
-                ids.append(id)
+            let store = try Reminders.store()
+
+            // 已有未完成条目的去重索引（只比目标清单）
+            var existing: [String: Set<String?>] = [:]
+            do {
+                existing = try await Reminders.existingIndex(in: cfg.listName, store: store)
+            } catch {
+                // 查重失败不该挡住写入 —— 降级成「不查重」
+                if !jsonOut { print("提示　：查重失败（\(error.localizedDescription)），本次不做去重") }
             }
+
+            var written: [ParsedDDL] = []
+            var skipped: [String] = []
+            var batch: [(String, Date?)] = []      // 本次识别出来的，用来判批次内重复
+
+            for p in parsed {
+                // ① 本次识别内部就重复了
+                if Reminders.isDuplicate(title: p.title, due: p.due,
+                                         index: Reminders.batchIndex(batch)) {
+                    skipped.append("\(p.title)　—— 本次识别出重复")
+                    continue
+                }
+                // ② 清单里已经有了
+                if Reminders.isDuplicate(title: p.title, due: p.due, index: existing) {
+                    skipped.append("\(p.title)　—— 清单里已经有了")
+                    continue
+                }
+                try Reminders.add(title: p.title, due: p.due, notes: p.notes,
+                                   listName: cfg.listName, store: store)
+                batch.append((p.title, p.due))
+                written.append(p)
+            }
+
+            if written.isEmpty {
+                let why = skipped.count == 1 ? skipped[0] : "\(skipped.count) 条都已在清单里，未重复录入"
+                Notify.post("没有新增待办", why)
+                if !jsonOut {
+                    print("状态　：⏭️ 没有新增（\(skipped.count) 条跳过）")
+                    for s in skipped { print("　　　　跳过：\(s)") }
+                }
+                return 0
+            }
+
             Notify.post("已加入 \(cfg.listName)",
-                        parsed.count == 1
-                        ? parsed[0].title + (parsed[0].due.map { " · \(fmtDate($0))" } ?? "")
-                        : "\(parsed.count) 条待办")
-            if !jsonOut { print("状态　：✅ 已写入 \(parsed.count) 条到提醒事项") }
+                        written.count == 1
+                        ? written[0].title + (written[0].due.map { " · \(fmtDate($0))" } ?? "")
+                        : "\(written.count) 条待办")
+            if !jsonOut {
+                print("状态　：✅ 已写入 \(written.count) 条到提醒事项")
+                for s in skipped { print("　　　　跳过：\(s)") }
+                if !skipped.isEmpty { print("　　　　（共跳过 \(skipped.count) 条重复）") }
+            }
             return 0
         } catch {
             fail("写入提醒事项失败：\(error.localizedDescription)")
@@ -1123,6 +1354,51 @@ public enum SelfTest {
         check("标题-上一行", title("交实验报告\n截止 11月5日"), "交实验报告")
         check("标题-英文", title("Deadline: Nov 5 submit report"), "submit report")
         check("标题-下一行", title("截止 11月5日\n提交实验报告"), "提交实验报告")
+
+        // ── 去重逻辑 ──
+        print("\n去重逻辑自检")
+        func checkBool(_ name: String, _ got: Bool, _ want: Bool = true) {
+            if got == want {
+                pass += 1
+                print("  ✅ \(name)")
+            } else {
+                fail += 1
+                print("  ❌ \(name)  got=\(got) want=\(want)")
+            }
+        }
+        func idx(_ items: [(String, Date?)]) -> [String: Set<String?>] {
+            Reminders.batchIndex(items)
+        }
+        let d22am = cal.date(from: DateComponents(year: 2026, month: 11, day: 22, hour: 9, minute: 0))!
+        let d22pm = cal.date(from: DateComponents(year: 2026, month: 11, day: 22, hour: 23, minute: 55))!
+        let d23am = cal.date(from: DateComponents(year: 2026, month: 11, day: 23, hour: 9, minute: 0))!
+
+        check("标准化-去首尾空白", Reminders.normalizeTitle("  提交作业  "), "提交作业")
+        check("标准化-去尾部标点", Reminders.normalizeTitle("提交作业。"), "提交作业")
+        check("标准化-压缩中间空白", Reminders.normalizeTitle("提交   作业"), "提交 作业")
+        check("标准化-全角转半角", Reminders.normalizeTitle("Ｓｕｂｍｉｔ"), "submit")
+        check("标准化-忽略大小写", Reminders.normalizeTitle("Submit Report"), "submit report")
+        check("标准化-中英混排保留", Reminders.normalizeTitle("完成 DDLShot 作业"), "完成 ddlshot 作业")
+
+        check("日期键-只到天", Reminders.dayKey(d22pm, cal: cal), "2026-11-22")
+
+        checkBool("查重-同一天不同时间算同一条",
+                  Reminders.isDuplicate(title: "提交文本分析作业", due: d22pm, index: idx([("提交文本分析作业", d22am)]), cal: cal))
+        checkBool("查重-不同日期不算重复",
+                  !Reminders.isDuplicate(title: "提交文本分析作业", due: d23am, index: idx([("提交文本分析作业", d22am)]), cal: cal))
+        checkBool("查重-新条目没识别出日期也算重复",
+                  Reminders.isDuplicate(title: "提交文本分析作业", due: nil, index: idx([("提交文本分析作业", d22am)]), cal: cal))
+        checkBool("查重-已有条目没写日期也算重复",
+                  Reminders.isDuplicate(title: "提交文本分析作业", due: d22am, index: idx([("提交文本分析作业", nil)]), cal: cal))
+        checkBool("查重-不同标题不算重复",
+                  !Reminders.isDuplicate(title: "B", due: d22am, index: idx([("A", d22am)]), cal: cal))
+        checkBool("查重-标题大小写不影响",
+                  Reminders.isDuplicate(title: "submit", due: d22am, index: idx([("Submit", d22am)]), cal: cal))
+        checkBool("查重-尾部标点不影响",
+                  Reminders.isDuplicate(title: "提交作业。", due: nil, index: idx([("提交作业", nil)]), cal: cal))
+        checkBool("查重-标题不同不算重复",
+                  !Reminders.isDuplicate(title: "完成概率统计第三章作业2", due: d22am,
+                                         index: idx([("完成概率统计第三章作业1", d22am)]), cal: cal))
 
         print("\n通过 \(pass)，失败 \(fail)")
         return fail == 0 ? 0 : 1
